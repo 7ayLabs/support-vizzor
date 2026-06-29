@@ -1,7 +1,10 @@
 /**
- * Strict env accessors. Throws at boot if a required value is missing
- * in production, falls back to a marked dev value otherwise. This is
- * the only file that should read `process.env` directly.
+ * Strict env accessors. Required values throw on FIRST USE in
+ * production — not at module load — so Next.js can analyze route
+ * modules at build time without secrets in scope. Falls back to a
+ * marked dev value in non-prod for the same lazy reason.
+ *
+ * This file is the only place that should read `process.env`.
  */
 
 const isProd = process.env.NODE_ENV === 'production';
@@ -23,20 +26,28 @@ function optional(name: string, fallback = ''): string {
 
 export const env = {
   isProd,
-  supportOrigin: optional(
-    'NEXT_PUBLIC_SUPPORT_ORIGIN',
-    'http://localhost:3000',
-  ),
-  vizzorOrigin: optional('NEXT_PUBLIC_VIZZOR_ORIGIN', 'https://vizzor.ai'),
-  rateLimitSalt: required('SUPPORT_RATE_LIMIT_SALT'),
-  ticketIdSalt: required('SUPPORT_TICKET_ID_SALT'),
-  ssoJwtSecret: required('SUPPORT_SSO_JWT_SECRET'),
-  triageWebhookUrl: optional('SUPPORT_TRIAGE_WEBHOOK_URL'),
-  trustedProxies: optional(
-    'SUPPORT_TRUSTED_PROXIES',
-    '127.0.0.1,::1',
-  )
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean),
-} as const;
+  get supportOrigin() {
+    return optional('NEXT_PUBLIC_SUPPORT_ORIGIN', 'http://localhost:3000');
+  },
+  get vizzorOrigin() {
+    return optional('NEXT_PUBLIC_VIZZOR_ORIGIN', 'https://vizzor.ai');
+  },
+  get rateLimitSalt() {
+    return required('SUPPORT_RATE_LIMIT_SALT');
+  },
+  get ticketIdSalt() {
+    return required('SUPPORT_TICKET_ID_SALT');
+  },
+  get ssoJwtSecret() {
+    return required('SUPPORT_SSO_JWT_SECRET');
+  },
+  get triageWebhookUrl() {
+    return optional('SUPPORT_TRIAGE_WEBHOOK_URL');
+  },
+  get trustedProxies() {
+    return optional('SUPPORT_TRUSTED_PROXIES', '127.0.0.1,::1')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  },
+};

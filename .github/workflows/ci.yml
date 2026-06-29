@@ -55,9 +55,17 @@ jobs:
         run: pnpm test
 
       - name: Build
+        # The required SUPPORT_* salts use lazy getters at runtime, so
+        # build-time absence is safe — but Next.js does load route
+        # modules during static analysis, and any of them touching env
+        # accidentally at top-level would crash the build. Setting
+        # placeholders here keeps CI honest if a route ever does.
         env:
           NEXT_PUBLIC_VIZZOR_ORIGIN: https://vizzor.ai
           NEXT_PUBLIC_SUPPORT_ORIGIN: https://support.vizzor.ai
+          SUPPORT_RATE_LIMIT_SALT: ci-build-rate-salt
+          SUPPORT_TICKET_ID_SALT: ci-build-ticket-salt
+          SUPPORT_SSO_JWT_SECRET: ci-build-jwt-secret
           GIT_SHA: ${{ github.sha }}
           BUILD_TIME: ${{ github.event.head_commit.timestamp || 'pr-build' }}
         run: pnpm build
