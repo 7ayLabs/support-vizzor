@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, testing, develop, release/**]
+  push:
+    branches:
+      - main
+      - testing
+      - develop
+      - feat/**
+      - fix/**
+      - hotfix/**
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-typecheck-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint || echo "lint not yet configured"
+        continue-on-error: true
+
+      - name: Test
+        env:
+          SUPPORT_RATE_LIMIT_SALT: ci-rate-salt
+          SUPPORT_TICKET_ID_SALT: ci-ticket-salt
+          SUPPORT_SSO_JWT_SECRET: ci-jwt-secret
+        run: pnpm test
+
+      - name: Build
+        env:
+          NEXT_PUBLIC_VIZZOR_ORIGIN: https://vizzor.ai
+          NEXT_PUBLIC_SUPPORT_ORIGIN: https://support.vizzor.ai
+          GIT_SHA: ${{ github.sha }}
+          BUILD_TIME: ${{ github.event.head_commit.timestamp || 'pr-build' }}
+        run: pnpm build
+
+      - name: Dependency audit
+        run: pnpm audit --audit-level high --prod
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          set -euo pipefail
+          curl -sSfL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan repository for leaked secrets
+        run: gitleaks detect
+          --source .
+          --config .gitleaks.toml
+          --redact
+          --no-banner
+          --verbose

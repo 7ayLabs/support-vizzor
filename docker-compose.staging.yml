@@ -1,0 +1,16 @@
+# Staging overlay — binds host port 7131, image tag `testing`.
+# Service renamed so prod and staging containers don't collide on the
+# same host.
+
+services:
+  support-vizzor:
+    image: ghcr.io/7aylabs/support-vizzor:testing
+    container_name: support-vizzor-staging
+    ports:
+      - "127.0.0.1:7131:3000"
+    volumes:
+      - support-vizzor-staging-db:/app/.support-data
+
+volumes:
+  support-vizzor-staging-db:
+    name: support-vizzor-staging-db

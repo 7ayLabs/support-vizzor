@@ -1,0 +1,33 @@
+# Base compose definition for support-vizzor. The prod/staging overlays
+# (docker-compose.prod.yml / docker-compose.staging.yml) bind the host
+# port and pull the right image tag. This file alone is not sufficient
+# to deploy — always supply an overlay.
+
+services:
+  support-vizzor:
+    image: ghcr.io/7aylabs/support-vizzor:latest
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_SUPPORT_ORIGIN: https://support.vizzor.ai
+      NEXT_PUBLIC_VIZZOR_ORIGIN: https://vizzor.ai
+      # Secrets supplied at the VPS via environment-file or compose
+      # overlay — never baked into the image.
+      SUPPORT_RATE_LIMIT_SALT: ${SUPPORT_RATE_LIMIT_SALT}
+      SUPPORT_TICKET_ID_SALT: ${SUPPORT_TICKET_ID_SALT}
+      SUPPORT_SSO_JWT_SECRET: ${SUPPORT_SSO_JWT_SECRET}
+      SUPPORT_TRIAGE_WEBHOOK_URL: ${SUPPORT_TRIAGE_WEBHOOK_URL:-}
+      SUPPORT_TRUSTED_PROXIES: ${SUPPORT_TRUSTED_PROXIES:-127.0.0.1,::1}
+      SUPPORT_DB_PATH: /app/.support-data/support.db
+    volumes:
+      - support-vizzor-db:/app/.support-data
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  support-vizzor-db:
+    name: support-vizzor-db

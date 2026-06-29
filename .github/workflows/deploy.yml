@@ -1,0 +1,163 @@
+name: Deploy
+
+# Branch-driven deploy with two environments — mirrors site-vizzor:
+#   testing → test-support.vizzor.ai (staging, port 7131)
+#   main    → support.vizzor.ai      (production, port 7130)
+# Both targets share one VPS host.
+
+on:
+  push:
+    branches: [main, testing]
+    paths-ignore:
+      - '**.md'
+      - '.github/**'
+      - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to deploy (defaults to the workflow branch)'
+        required: false
+        default: ''
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: 7aylabs/support-vizzor
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      target:           ${{ steps.r.outputs.target }}
+      image_tag:        ${{ steps.r.outputs.image_tag }}
+      host_url:         ${{ steps.r.outputs.host_url }}
+      service_name:     ${{ steps.r.outputs.service_name }}
+      compose_overlay:  ${{ steps.r.outputs.compose_overlay }}
+      vizzor_origin:    ${{ steps.r.outputs.vizzor_origin }}
+      support_origin:   ${{ steps.r.outputs.support_origin }}
+      checkout_ref:     ${{ steps.r.outputs.checkout_ref }}
+    steps:
+      - id: r
+        run: |
+          set -euo pipefail
+          REF="${{ inputs.ref }}"
+          if [ -z "$REF" ]; then REF="${{ github.ref }}"; fi
+          case "$REF" in
+            main|refs/heads/main)
+              echo "target=prod"                                       >> "$GITHUB_OUTPUT"
+              echo "image_tag=latest"                                  >> "$GITHUB_OUTPUT"
+              echo "host_url=https://support.vizzor.ai"                >> "$GITHUB_OUTPUT"
+              echo "service_name=support-vizzor"                       >> "$GITHUB_OUTPUT"
+              echo "compose_overlay=docker-compose.prod.yml"           >> "$GITHUB_OUTPUT"
+              echo "vizzor_origin=https://vizzor.ai"                   >> "$GITHUB_OUTPUT"
+              echo "support_origin=https://support.vizzor.ai"          >> "$GITHUB_OUTPUT"
+              echo "checkout_ref=main"                                 >> "$GITHUB_OUTPUT"
+              ;;
+            testing|refs/heads/testing)
+              echo "target=staging"                                    >> "$GITHUB_OUTPUT"
+              echo "image_tag=testing"                                 >> "$GITHUB_OUTPUT"
+              echo "host_url=https://test-support.vizzor.ai"           >> "$GITHUB_OUTPUT"
+              echo "service_name=support-vizzor-staging"               >> "$GITHUB_OUTPUT"
+              echo "compose_overlay=docker-compose.staging.yml"        >> "$GITHUB_OUTPUT"
+              echo "vizzor_origin=https://test.vizzor.ai"              >> "$GITHUB_OUTPUT"
+              echo "support_origin=https://test-support.vizzor.ai"     >> "$GITHUB_OUTPUT"
+              echo "checkout_ref=testing"                              >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Unsupported deploy ref: $REF"
+              exit 1
+              ;;
+          esac
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: resolve
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.checkout_ref }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ needs.resolve.outputs.image_tag }}
+            type=raw,value=${{ github.ref_name }}-${{ github.sha }},enable=true
+            type=sha,prefix=,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ github.event.head_commit.timestamp }}
+            NEXT_PUBLIC_VIZZOR_ORIGIN=${{ needs.resolve.outputs.vizzor_origin }}
+            NEXT_PUBLIC_SUPPORT_ORIGIN=${{ needs.resolve.outputs.support_origin }}
+
+  deploy-vps:
+    runs-on: ubuntu-latest
+    needs: [resolve, build-and-push]
+    timeout-minutes: 10
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: TARGET,SERVICE,OVERLAY
+          script_stop: true
+          script: |
+            set -euo pipefail
+            export TARGET="${{ needs.resolve.outputs.target }}"
+            export SERVICE="${{ needs.resolve.outputs.service_name }}"
+            export OVERLAY="${{ needs.resolve.outputs.compose_overlay }}"
+            cd /opt/7aylabs
+            echo "▶  Deploying $SERVICE ($TARGET) via $OVERLAY"
+            docker compose -f docker-compose.yml -f "$OVERLAY" pull "$SERVICE"
+            docker compose -f docker-compose.yml -f "$OVERLAY" up -d --no-deps --force-recreate "$SERVICE"
+            docker image prune -af --filter "until=72h"
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          HOST_URL="${{ needs.resolve.outputs.host_url }}"
+          echo "▶  Smoke-testing ${{ needs.resolve.outputs.target }} at $HOST_URL/api/health"
+          for i in 1 2 3 4 5 6 7 8; do
+            sleep 5
+            BODY=$(curl -sf "$HOST_URL/api/health" || echo "")
+            STATUS=$(echo "$BODY" | jq -r '.status              // "down"')
+            DB=$(echo     "$BODY" | jq -r '.subsystems.sqlite.ok // false')
+            echo "attempt $i → status=$STATUS sqlite=$DB"
+            if [ "$STATUS" = "healthy" ] && [ "$DB" = "true" ]; then
+              exit 0
+            fi
+          done
+          echo "::error::Health check failed at $HOST_URL after 8 attempts" >&2
+          exit 1

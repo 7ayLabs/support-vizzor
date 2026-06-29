@@ -1,0 +1,18 @@
+# Gitleaks scoping for support-vizzor. The defaults catch the bulk of
+# leaks; this file only adds allowlists for the well-known placeholder
+# locations that aren't real secrets.
+
+[allowlist]
+description = "Allowlist known non-secret placeholders"
+paths = [
+  '''\\.env\\.example''',
+  '''(?i)docs/.*\\.md''',
+  '''(?i).*test.*\\.ts''',
+  '''(?i).*fixture.*''',
+]
+regexes = [
+  '''dev-support_.*''',
+  '''change-me-in-prod''',
+  '''ci-(rate|ticket|jwt)-secret''',
+  '''test-(jwt|rate|ticket)-secret''',
+]

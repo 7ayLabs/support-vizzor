@@ -1,0 +1,14 @@
+node_modules
+.next
+.git
+.github
+data
+coverage
+*.log
+.env
+.env.local
+.env.production
+.env.staging
+docs
+README.md
+CLAUDE.md

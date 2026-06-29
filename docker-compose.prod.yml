@@ -1,0 +1,8 @@
+# Production overlay — binds host port 7130, image tag `latest`.
+
+services:
+  support-vizzor:
+    image: ghcr.io/7aylabs/support-vizzor:latest
+    container_name: support-vizzor
+    ports:
+      - "127.0.0.1:7130:3000"
